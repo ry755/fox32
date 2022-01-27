@@ -1,0 +1,6 @@
+**/.vscode/
+
+**/debug/
+**/target/
+
+/tests/
