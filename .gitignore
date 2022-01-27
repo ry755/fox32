@@ -3,4 +3,6 @@
 **/debug/
 **/target/
 
+**/fox32.rom
+
 /tests/
