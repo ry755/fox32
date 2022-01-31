@@ -7,7 +7,7 @@ name: fox32 Unstable - Windows
 
 jobs:
   fox32-unstable-windows:
-    name: fox32 Unstable
+    name: Build
     runs-on: windows-latest
     defaults:
       run:

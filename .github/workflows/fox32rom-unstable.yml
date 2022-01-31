@@ -7,7 +7,7 @@ name: fox32rom Unstable
 
 jobs:
   fox32rom-unstable-linux:
-    name: fox32rom Unstable
+    name: Build
     runs-on: ubuntu-latest
     defaults:
       run:
