@@ -1,0 +1,36 @@
+on:
+  push:
+    paths:
+    - 'fox32/**'
+
+name: fox32 Unstable - Linux
+
+jobs:
+  fox32-unstable-linux:
+    name: fox32 Unstable
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./fox32
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Install libgtk-3-dev
+        run: |
+          sudo apt update
+          sudo apt install -y libgtk-3-dev
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: fox32
+          path: fox32/target/release/fox32
