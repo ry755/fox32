@@ -1,7 +1,9 @@
 on:
   push:
+    branches:
+      - main
     paths:
-    - 'fox32rom/**'
+      - 'fox32rom/**'
 
 name: fox32rom Unstable
 

@@ -1,7 +1,9 @@
 on:
   push:
+    branches:
+      - main
     paths:
-    - 'fox32asm/**'
+      - 'fox32asm/**'
 
 name: fox32asm Unstable - Windows
 

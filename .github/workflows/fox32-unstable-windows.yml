@@ -1,7 +1,9 @@
 on:
   push:
+    branches:
+      - main
     paths:
-    - 'fox32/**'
+      - 'fox32/**'
 
 name: fox32 Unstable - Windows
 
