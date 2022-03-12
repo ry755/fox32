@@ -2,6 +2,8 @@
 
 **fox32** (stylized in all lowercase) is a 32 bit fantasy computer architecture, with a custom operating system and user interface inspired by various classic computers.
 
+![Screenshot of fox32rom](docs/screenshot_fox32rom.png)
+
 ## Getting Started
 
 **Note: This software is still very much in an early stage, and is currently more focused towards developers rather than end-users.**
