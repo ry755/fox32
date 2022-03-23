@@ -15,7 +15,7 @@ start_boot_process:
     mov r31, r0
     mov r0, 0          ; sector counter
     mov r2, 0x00000800 ; destination pointer
-    mov r3, 0x80003000 ; command to read a sector from disk 0 into memory
+    mov r3, 0x80003000 ; command to read a sector from disk 0 into the buffer
     mov r4, 0x80002000 ; command to set the location of the buffer
 
     ; first, check to see if this is a FAT-formatted disk
@@ -33,7 +33,9 @@ start_boot_process_raw_binary_sector_loop:
     loop start_boot_process_raw_binary_sector_loop
     jmp start_boot_process_done
 start_boot_process_fat:
-    ;
+    call fat32_get_bpb_data
+hang:
+    jmp hang
 start_boot_process_done:
     ; done loading !!!
     ; now clean up and jump to the loaded binary

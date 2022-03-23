@@ -6,7 +6,7 @@ const FOX32ROM_VERSION_MAJOR: 0
 const FOX32ROM_VERSION_MINOR: 1
 const FOX32ROM_VERSION_PATCH: 0
 
-const SYSTEM_STACK:     0x01FFF800
+const SYSTEM_STACK:     0x01FFF400
 const BACKGROUND_COLOR: 0xFF674764
 const TEXT_COLOR:       0xFFFFFFFF
 
@@ -130,6 +130,7 @@ get_rom_version:
     #include "draw_rectangle.asm"
     #include "draw_text.asm"
     #include "event.asm"
+    #include "fat32.asm"
     #include "memory.asm"
     #include "menu.asm"
     #include "menu_bar.asm"
