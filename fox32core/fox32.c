@@ -568,10 +568,10 @@ static bool vm_shouldskip(vm_t *vm, uint8_t condition) {
             return vm->flag_carry == true;
         };
         case CD_IFGT: {
-            return (vm->flag_zero == false) && (vm->flag_carry == false);
+            return (vm->flag_zero == true) || (vm->flag_carry == true);
         };
         case CD_IFLTEQ: {
-            return (vm->flag_zero == true) || (vm->flag_carry == true);
+            return (vm->flag_zero == false) && (vm->flag_carry == false);
         };
     }
     vm_panic(vm, FOX32_ERR_BADCONDITION);
