@@ -9,3 +9,8 @@ libc = { version = "0.2", default-features = false }
 [build-dependencies]
 cc = "1.0"
 bindgen = "0.59"
+
+[profile.release]
+codegen-units = 1
+opt-level = 3
+lto = "fat"

@@ -237,8 +237,8 @@ static const asm_iinfo_t asm_iinfos[256] = {
     [OP_IREM ] = { "IREM ", 2 }
 };
 
-static asm_iinfo_t *asm_iinfo_get(uint8_t opcode) {
-    asm_iinfo_t *iinfo = &asm_iinfos[opcode & 0x3F];
+static const asm_iinfo_t *asm_iinfo_get(uint8_t opcode) {
+    const asm_iinfo_t *iinfo = &asm_iinfos[opcode & 0x3F];
     if (iinfo->name == NULL) {
         iinfo = &asm_iinfo_unknown;
     }
@@ -256,7 +256,7 @@ static uint32_t asm_disas_prsize(asm_instr_t instr, uint8_t prtype) {
     return 0;
 }
 
-static uint32_t asm_disas_paramssize(asm_instr_t instr, asm_iinfo_t *iinfo) {
+static uint32_t asm_disas_paramssize(asm_instr_t instr, const asm_iinfo_t *iinfo) {
     uint32_t size = 0;
     if (iinfo->prcount > 0) size += asm_disas_prsize(instr, instr.source);
     if (iinfo->prcount > 1) size += asm_disas_prsize(instr, instr.target);
@@ -289,36 +289,36 @@ static const char *const asm_disas_strslocal[34] = {
     "RSP", "???"
 };
 
-static void asm_disas_printparam(asm_instr_t instr, asm_iinfo_t *iinfo, const uint8_t **prdata, char **str, uint8_t prtype) {
+static void asm_disas_printparam(asm_instr_t instr, const uint8_t **paramsdata, char **buffer, uint8_t prtype) {
     int count = 0;
 
     if (prtype < TY_IMM) {
-        uint8_t local = ptr_get8(*prdata);
-        *prdata += SIZE8;
+        uint8_t local = ptr_get8(*paramsdata);
+        *paramsdata += SIZE8;
 
         const char* str_local = asm_disas_strslocal[33];
         if (local < 33) {
             str_local = asm_disas_strslocal[local];
         }
 
-        count = sprintf(*str, "%s %s     ", prtype == TY_REG ? "REG   " : "REGPTR", str_local);
+        count = sprintf(*buffer, "%s %s     ", prtype == TY_REG ? "REG   " : "REGPTR", str_local);
     } else {
         uint32_t value = 0;
         switch (instr.size) {
-            case SZ_BYTE: value = (uint32_t) ptr_get8 (*prdata); *prdata += SIZE8 ; break;
-            case SZ_HALF: value = (uint32_t) ptr_get16(*prdata); *prdata += SIZE16; break;
-            case SZ_WORD: value =            ptr_get32(*prdata); *prdata += SIZE32; break;
+            case SZ_BYTE: value = (uint32_t) ptr_get8 (*paramsdata); *paramsdata += SIZE8 ; break;
+            case SZ_HALF: value = (uint32_t) ptr_get16(*paramsdata); *paramsdata += SIZE16; break;
+            case SZ_WORD: value =            ptr_get32(*paramsdata); *paramsdata += SIZE32; break;
         }
 
-        count = sprintf(*str, "%s %08x", prtype == TY_IMM ? "IMM   " : "IMMPTR", value);
+        count = sprintf(*buffer, "%s %08x", prtype == TY_IMM ? "IMM   " : "IMMPTR", value);
     }
 
     if (count > 0) {
-        *str += (size_t) count;
+        *buffer += (size_t) count;
     }
 }
 
-static void asm_disas_print(asm_instr_t instr, asm_iinfo_t *iinfo, const uint8_t *prdata, char *str) {
+static void asm_disas_print(asm_instr_t instr, const asm_iinfo_t *iinfo, const uint8_t *paramsdata, char *buffer) {
     const char *str_size = asm_disas_strssize[3];
     if (instr.size < 3) {
         str_size = asm_disas_strssize[instr.size];
@@ -328,19 +328,19 @@ static void asm_disas_print(asm_instr_t instr, asm_iinfo_t *iinfo, const uint8_t
         str_condition = asm_disas_strscondition[instr.condition];
     }
 
-    int count = sprintf(str, "%s %s %s", str_condition, str_size, iinfo->name);
+    int count = sprintf(buffer, "%s %s %s", str_condition, str_size, iinfo->name);
     if (count > 0) {
-        str += (size_t) count;
+        buffer += (size_t) count;
     }
 
     if (iinfo->prcount > 0) {
-        *str++ = ' ';
-        asm_disas_printparam(instr, iinfo, &prdata, &str, instr.source);
+        *buffer++ = ' ';
+        asm_disas_printparam(instr, &paramsdata, &buffer, instr.source);
     }
     if (iinfo->prcount > 1) {
-        *str++ = ',';
-        *str++ = ' ';
-        asm_disas_printparam(instr, iinfo, &prdata, &str, instr.target);
+        *buffer++ = ',';
+        *buffer++ = ' ';
+        asm_disas_printparam(instr, &paramsdata, &buffer, instr.target);
     }
 }
 
@@ -733,29 +733,30 @@ static void vm_skipparam(vm_t *vm, uint32_t size, uint8_t prtype) {
     break;                                      \
 }
 
+static void vm_debug(vm_t *vm, asm_instr_t instr, uint32_t address) {
+    const asm_iinfo_t *iinfo = asm_iinfo_get(instr.opcode);
+
+    uint32_t params_size = asm_disas_paramssize(instr, iinfo);
+    uint8_t *params_data = NULL;
+    if (params_size > 0) {
+        params_data = vm_findmemory(vm, address + SIZE16, params_size, false);
+    }
+
+    char buffer[128] = {};
+    asm_disas_print(instr, iinfo, params_data, buffer);
+
+    printf("%08x %s\n", address, buffer);
+}
+
 static void vm_execute(vm_t *vm) {
     uint32_t instr_base = vm->pointer_instr;
-    uint32_t instr_data = instr_base + SIZE16;
     uint16_t instr_raw = vm_read16(vm, instr_base);
 
     asm_instr_t instr = asm_instr_from(instr_raw);
 
-    if (vm->debug) {
-        asm_iinfo_t *iinfo = asm_iinfo_get(instr.opcode);
+    vm->pointer_instr_mut = instr_base + SIZE16;
 
-        uint32_t params_size = asm_disas_paramssize(instr, iinfo);
-        uint8_t *params_data = NULL;
-        if (params_size > 0) {
-            params_data = vm_findmemory(vm, instr_data, params_size, false);
-        }
-
-        char buffer[128] = {};
-        asm_disas_print(instr, iinfo, params_data, buffer);
-
-        printf("%08x %s\n", instr_base, buffer);
-    }
-
-    vm->pointer_instr_mut = instr_data;
+    if (vm->debug) vm_debug(vm, instr, instr_base);
 
     switch (instr.opcode) {
         case OP(SZ_BYTE, OP_NOP):
@@ -945,9 +946,10 @@ static err_t vm_resume(vm_t *vm, uint32_t count) {
     if (setjmp(vm->panic_jmp) != 0) {
         return vm->halted = true, vm->panic_err;
     }
-    while (!vm->halted && count > 0) {
+    uint32_t remaining = count;
+    while (!vm->halted && remaining > 0) {
         vm_execute(vm);
-        count -= 1;
+        remaining -= 1;
     }
     return FOX32_ERR_OK;
 }
