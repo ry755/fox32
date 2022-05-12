@@ -220,11 +220,17 @@ static uint32_t *vm_findlocal(vm_t *vm, uint8_t local) {
 
 static uint8_t *vm_findmemory(vm_t *vm, uint32_t address, uint32_t size, bool write) {
     uint32_t address_end = address + size;
-    if (address_end < FOX32_MEMORY_RAM && address_end > address) {
-        return &vm->memory_ram[address];
-    }
-    if (!write && address >= FOX32_MEMORY_ROM_START && (address -= FOX32_MEMORY_ROM_START) + size < FOX32_MEMORY_ROM) {
-        return &vm->memory_rom[address];
+    if (address_end > address) {
+        if (address_end <= FOX32_MEMORY_RAM) {
+            return &vm->memory_ram[address];
+        }
+        if (
+            !write &&
+            (address >= FOX32_MEMORY_ROM_START) &&
+            (address -= FOX32_MEMORY_ROM_START) + size <= FOX32_MEMORY_ROM
+        ) {
+            return &vm->memory_rom[address];
+        }
     }
     vm_panic(vm, FOX32_ERR_FAULT);
 }

@@ -64,6 +64,8 @@ pub struct State {
     bus: *mut Box<dyn Bus>
 }
 
+unsafe impl Send for State {}
+
 unsafe extern "C" fn io_read_trampoline(user: *mut libc::c_void, value: *mut u32, port: u32) -> libc::c_int {
     match (*user.cast::<Box<dyn Bus>>()).io_read(port) {
         Some(v) => { *value = v; 0 }
