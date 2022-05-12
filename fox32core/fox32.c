@@ -100,7 +100,7 @@ enum {
     SZ_WORD
 };
 
-#define OP(_size, _opcode) (((uint8_t) (_opcode)) | (((uint8_t) (_size)) << 6))
+#define OP(_size, _optype) (((uint8_t) (_optype)) | (((uint8_t) (_size)) << 6))
 
 enum {
     CD_ALWAYS,
@@ -127,6 +127,10 @@ enum {
     EX_DIVZERO,
     EX_BUS
 };
+
+#define SIZE8 1
+#define SIZE16 2
+#define SIZE32 4
 
 static uint8_t ptr_get8(const void *ptr) {
     return *((const uint8_t *) ptr);
@@ -161,9 +165,184 @@ static void ptr_set32(void *ptr, uint32_t value) {
     bytes[3] = (uint8_t) (value >> 24);
 }
 
-#define SIZE8 1
-#define SIZE16 2
-#define SIZE32 4
+typedef struct {
+    uint8_t opcode;
+    uint8_t condition;
+    uint8_t target;
+    uint8_t source;
+    uint8_t size;
+} asm_instr_t;
+
+static asm_instr_t asm_instr_from(uint16_t half) {
+    asm_instr_t instr = {
+        (half >>  8),
+        (half >>  4) & 7,
+        (half >>  2) & 3,
+        (half      ) & 3,
+        (half >> 14)
+    };
+    return instr;
+}
+
+typedef struct {
+    const char *const name;
+    const unsigned int prcount;
+} asm_iinfo_t;
+
+static const asm_iinfo_t asm_iinfo_unknown = { "ERROR", 0 };
+static const asm_iinfo_t asm_iinfos[256] = {
+    [OP_NOP  ] = { "NOP  ", 0 },
+    [OP_ADD  ] = { "ADD  ", 2 },
+    [OP_MUL  ] = { "MUL  ", 2 },
+    [OP_AND  ] = { "AND  ", 2 },
+    [OP_SLA  ] = { "SLA  ", 2 },
+    [OP_SRA  ] = { "SRA  ", 2 },
+    [OP_BSE  ] = { "BSE  ", 2 },
+    [OP_CMP  ] = { "CMP  ", 2 },
+    [OP_JMP  ] = { "JMP  ", 1 },
+    [OP_RJMP ] = { "RJMP ", 1 },
+    [OP_PUSH ] = { "PUSH ", 1 },
+    [OP_IN   ] = { "IN   ", 2 },
+    [OP_ISE  ] = { "ISE  ", 0 },
+    [OP_IMUL ] = { "IMUL ", 2 },
+    [OP_HALT ] = { "HALT ", 0 },
+    [OP_INC  ] = { "INC  ", 1 },
+    [OP_POW  ] = { "POW  ", 2 },
+    [OP_OR   ] = { "OR   ", 2 },
+    [OP_SRL  ] = { "SRL  ", 2 },
+    [OP_BCL  ] = { "BCL  ", 2 },
+    [OP_MOV  ] = { "MOV  ", 2 },
+    [OP_CALL ] = { "CALL ", 1 },
+    [OP_RCALL] = { "RCALL", 1 },
+    [OP_POP  ] = { "POP  ", 1 },
+    [OP_OUT  ] = { "OUT  ", 2 },
+    [OP_ICL  ] = { "ICL  ", 0 },
+    [OP_BRK  ] = { "BRK  ", 0 },
+    [OP_SUB  ] = { "SUB  ", 2 },
+    [OP_DIV  ] = { "DIV  ", 2 },
+    [OP_XOR  ] = { "XOR  ", 2 },
+    [OP_ROL  ] = { "ROL  ", 2 },
+    [OP_ROR  ] = { "ROR  ", 2 },
+    [OP_BTS  ] = { "BTS  ", 2 },
+    [OP_MOVZ ] = { "MOVZ ", 2 },
+    [OP_LOOP ] = { "LOOP ", 1 },
+    [OP_RLOOP] = { "RLOOP", 1 },
+    [OP_RET  ] = { "RET  ", 0 },
+    [OP_IDIV ] = { "IDIV ", 2 },
+    [OP_DEC  ] = { "DEC  ", 1 },
+    [OP_REM  ] = { "REM  ", 2 },
+    [OP_NOT  ] = { "NOT  ", 1 },
+    [OP_RTA  ] = { "RTA  ", 2 },
+    [OP_RETI ] = { "RETI ", 0 },
+    [OP_IREM ] = { "IREM ", 2 }
+};
+
+static asm_iinfo_t *asm_iinfo_get(uint8_t opcode) {
+    asm_iinfo_t *iinfo = &asm_iinfos[opcode & 0x3F];
+    if (iinfo->name == NULL) {
+        iinfo = &asm_iinfo_unknown;
+    }
+    return iinfo;
+}
+
+static uint32_t asm_disas_prsize(asm_instr_t instr, uint8_t prtype) {
+    if (prtype < TY_IMM) return SIZE8;
+    if (prtype < TY_IMMPTR) return SIZE32;
+    switch (instr.size) {
+        case SZ_BYTE: return SIZE8;
+        case SZ_HALF: return SIZE16;
+        case SZ_WORD: return SIZE32;
+    }
+    return 0;
+}
+
+static uint32_t asm_disas_paramssize(asm_instr_t instr, asm_iinfo_t *iinfo) {
+    uint32_t size = 0;
+    if (iinfo->prcount > 0) size += asm_disas_prsize(instr, instr.source);
+    if (iinfo->prcount > 1) size += asm_disas_prsize(instr, instr.target);
+    return size;
+}
+
+static const char *const asm_disas_strssize[4] = {
+    "BYTE",
+    "HALF",
+    "WORD",
+    "????"
+};
+
+static const char *const asm_disas_strscondition[8] = {
+    "      ",
+    "IFZ   ",
+    "IFNZ  ",
+    "IFC   ",
+    "IFNC  ",
+    "IFGT  ",
+    "IFLTEQ",
+    "??????"
+};
+
+static const char *const asm_disas_strslocal[34] = {
+    "R0 ", "R1 ", "R2 ", "R3 ", "R4 ", "R5 ", "R6 ", "R7 ",
+    "R8 ", "R9 ", "R10", "R11", "R12", "R13", "R14", "R15",
+    "R16", "R17", "R18", "R19", "R20", "R21", "R22", "R23",
+    "R24", "R25", "R26", "R27", "R28", "R29", "R30", "R31",
+    "RSP", "???"
+};
+
+static void asm_disas_printparam(asm_instr_t instr, asm_iinfo_t *iinfo, const uint8_t **prdata, char **str, uint8_t prtype) {
+    int count = 0;
+
+    if (prtype < TY_IMM) {
+        uint8_t local = ptr_get8(*prdata);
+        *prdata += SIZE8;
+
+        const char* str_local = asm_disas_strslocal[33];
+        if (local < 33) {
+            str_local = asm_disas_strslocal[local];
+        }
+
+        count = sprintf(*str, "%s %s     ", prtype == TY_REG ? "REG   " : "REGPTR", str_local);
+    } else {
+        uint32_t value = 0;
+        switch (instr.size) {
+            case SZ_BYTE: value = (uint32_t) ptr_get8 (*prdata); *prdata += SIZE8 ; break;
+            case SZ_HALF: value = (uint32_t) ptr_get16(*prdata); *prdata += SIZE16; break;
+            case SZ_WORD: value =            ptr_get32(*prdata); *prdata += SIZE32; break;
+        }
+
+        count = sprintf(*str, "%s %08x", prtype == TY_IMM ? "IMM   " : "IMMPTR", value);
+    }
+
+    if (count > 0) {
+        *str += (size_t) count;
+    }
+}
+
+static void asm_disas_print(asm_instr_t instr, asm_iinfo_t *iinfo, const uint8_t *prdata, char *str) {
+    const char *str_size = asm_disas_strssize[3];
+    if (instr.size < 3) {
+        str_size = asm_disas_strssize[instr.size];
+    }
+    const char *str_condition = asm_disas_strscondition[7];
+    if (instr.condition < 8) {
+        str_condition = asm_disas_strscondition[instr.condition];
+    }
+
+    int count = sprintf(str, "%s %s %s", str_condition, str_size, iinfo->name);
+    if (count > 0) {
+        str += (size_t) count;
+    }
+
+    if (iinfo->prcount > 0) {
+        *str++ = ' ';
+        asm_disas_printparam(instr, iinfo, &prdata, &str, instr.source);
+    }
+    if (iinfo->prcount > 1) {
+        *str++ = ',';
+        *str++ = ' ';
+        asm_disas_printparam(instr, iinfo, &prdata, &str, instr.target);
+    }
+}
 
 typedef fox32_vm_t vm_t;
 
@@ -401,6 +580,8 @@ static bool vm_shouldskip(vm_t *vm, uint8_t condition) {
 static void vm_skipparam(vm_t *vm, uint32_t size, uint8_t prtype) {
     if (prtype < TY_IMM) {
         vm->pointer_instr_mut += SIZE8;
+    } else if (prtype == TY_IMMPTR) {
+        vm->pointer_instr_mut += SIZE32;
     } else {
         vm->pointer_instr_mut += size;
     }
@@ -433,45 +614,45 @@ static void vm_skipparam(vm_t *vm, uint32_t size, uint8_t prtype) {
 #define SOURCEMAP_RELATIVE(x) (instr_base + (x))
 
 #define VM_PRELUDE_0() {                      \
-    if (vm_shouldskip(vm, instr_condition)) { \
+    if (vm_shouldskip(vm, instr.condition)) { \
         break;                                \
     }                                         \
 }
 #define VM_PRELUDE_1(_size) {                  \
-    if (vm_shouldskip(vm, instr_condition)) {  \
-        vm_skipparam(vm, _size, instr_source); \
+    if (vm_shouldskip(vm, instr.condition)) {  \
+        vm_skipparam(vm, _size, instr.source); \
         break;                                 \
     }                                          \
 }
 #define VM_PRELUDE_2(_size) {                  \
-    if (vm_shouldskip(vm, instr_condition)) {  \
-        vm_skipparam(vm, _size, instr_target); \
-        vm_skipparam(vm, _size, instr_source); \
+    if (vm_shouldskip(vm, instr.condition)) {  \
+        vm_skipparam(vm, _size, instr.target); \
+        vm_skipparam(vm, _size, instr.source); \
         break;                                 \
     }                                          \
 }
 
 #define VM_IMPL_JMP(_sourcemap) {                                      \
     VM_PRELUDE_1(SIZE32);                                              \
-    vm->pointer_instr_mut = _sourcemap(vm_source32(vm, instr_source)); \
+    vm->pointer_instr_mut = _sourcemap(vm_source32(vm, instr.source)); \
     break;                                                             \
 }
 
 #define VM_IMPL_LOOP(_sourcemap) {                                         \
     if (                                                                   \
-        !vm_shouldskip(vm, instr_condition) &&                             \
+        !vm_shouldskip(vm, instr.condition) &&                             \
         (vm->registers[FOX32_REGISTER_LOOP] -= 1) != 0                     \
     ) {                                                                    \
-        vm->pointer_instr_mut = _sourcemap(vm_source32(vm, instr_source)); \
+        vm->pointer_instr_mut = _sourcemap(vm_source32(vm, instr.source)); \
     } else {                                                               \
-        vm_skipparam(vm, SIZE32, instr_source);                            \
+        vm_skipparam(vm, SIZE32, instr.source);                            \
     }                                                                      \
     break;                                                                 \
 }
 
 #define VM_IMPL_CALL(_sourcemap) {                         \
     VM_PRELUDE_1(SIZE32);                                  \
-    uint32_t pointer_call = vm_source32(vm, instr_source); \
+    uint32_t pointer_call = vm_source32(vm, instr.source); \
     vm_push32(vm, vm->pointer_instr_mut);                  \
     vm->pointer_instr_mut = _sourcemap(pointer_call);      \
     break;                                                 \
@@ -479,65 +660,65 @@ static void vm_skipparam(vm_t *vm, uint32_t size, uint8_t prtype) {
 
 #define VM_IMPL_POP(_size, _vm_target, _vm_pop) { \
     VM_PRELUDE_1(_size);                          \
-    _vm_target(vm, instr_source, _vm_pop(vm));    \
+    _vm_target(vm, instr.source, _vm_pop(vm));    \
     break;                                        \
 }
 
 #define VM_IMPL_PUSH(_size, _vm_source, _vm_push) { \
     VM_PRELUDE_1(_size);                            \
-    _vm_push(vm, _vm_source(vm, instr_source));     \
+    _vm_push(vm, _vm_source(vm, instr.source));     \
     break;                                          \
 }
 
 #define VM_IMPL_MOV(_size, _vm_source, _vm_target) {            \
     VM_PRELUDE_2(_size);                                        \
-    _vm_target(vm, instr_target, _vm_source(vm, instr_source)); \
+    _vm_target(vm, instr.target, _vm_source(vm, instr.source)); \
     break;                                                      \
 }
 
 #define VM_IMPL_NOT(_size, _type, _vm_source_stay, _vm_target) { \
     VM_PRELUDE_1(_size);                                         \
-    _type v = _vm_source_stay(vm, instr_source);                 \
+    _type v = _vm_source_stay(vm, instr.source);                 \
     _type x = ~v;                                                \
     vm->flag_zero = x == 0;                                      \
-    _vm_target(vm, instr_source, x);                             \
+    _vm_target(vm, instr.source, x);                             \
     break;                                                       \
 }
 
 #define VM_IMPL_INC(_size, _type, _vm_source_stay, _vm_target, _oper) { \
     VM_PRELUDE_1(_size);                                                \
-    _type v = _vm_source_stay(vm, instr_source);                        \
+    _type v = _vm_source_stay(vm, instr.source);                        \
     _type x;                                                            \
     vm->flag_carry = _oper(v, 1, &x);                                   \
     vm->flag_zero = x == 0;                                             \
-    _vm_target(vm, instr_source, x);                                    \
+    _vm_target(vm, instr.source, x);                                    \
     break;                                                              \
 }
 
 #define VM_IMPL_ADD(_size, _type, _type_target, _vm_source, _vm_source_stay, _vm_target, _oper) { \
     VM_PRELUDE_2(_size);                                                                          \
-    _type a = (_type) _vm_source(vm, instr_source);                                               \
-    _type b = (_type) _vm_source_stay(vm, instr_target);                                          \
+    _type a = (_type) _vm_source(vm, instr.source);                                               \
+    _type b = (_type) _vm_source_stay(vm, instr.target);                                          \
     _type x;                                                                                      \
     vm->flag_carry = _oper(b, a, &x);                                                             \
     vm->flag_zero = x == 0;                                                                       \
-    _vm_target(vm, instr_target, (_type_target) x);                                               \
+    _vm_target(vm, instr.target, (_type_target) x);                                               \
     break;                                                                                        \
 }
 
 #define VM_IMPL_AND(_size, _type, _type_target, _vm_source, _vm_source_stay, _vm_target, _oper) { \
     VM_PRELUDE_2(_size);                                                                          \
-    _type a = (_type) _vm_source(vm, instr_source);                                               \
-    _type b = (_type) _vm_source_stay(vm, instr_target);                                          \
+    _type a = (_type) _vm_source(vm, instr.source);                                               \
+    _type b = (_type) _vm_source_stay(vm, instr.target);                                          \
     _type x = _oper(b, a);                                                                        \
     vm->flag_zero = x == 0;                                                                       \
-    _vm_target(vm, instr_target, (_type_target) x);                                               \
+    _vm_target(vm, instr.target, (_type_target) x);                                               \
     break;                                                                                        \
 }
 
 #define VM_IMPL_CMP(_size, _type, _vm_source) { \
-    _type a = _vm_source(vm, instr_source);     \
-    _type b = _vm_source(vm, instr_target);     \
+    _type a = _vm_source(vm, instr.source);     \
+    _type b = _vm_source(vm, instr.target);     \
     _type x;                                    \
     vm->flag_carry = CHECKED_SUB(b, a, &x);     \
     vm->flag_zero = x == 0;                     \
@@ -545,8 +726,8 @@ static void vm_skipparam(vm_t *vm, uint32_t size, uint8_t prtype) {
 }
 
 #define VM_IMPL_BTS(_size, _type, _vm_source) { \
-    _type a = _vm_source(vm, instr_source);     \
-    _type b = _vm_source(vm, instr_target);     \
+    _type a = _vm_source(vm, instr.source);     \
+    _type b = _vm_source(vm, instr.target);     \
     _type x = b & (1 << a);                     \
     vm->flag_zero = x == 0;                     \
     break;                                      \
@@ -554,16 +735,29 @@ static void vm_skipparam(vm_t *vm, uint32_t size, uint8_t prtype) {
 
 static void vm_execute(vm_t *vm) {
     uint32_t instr_base = vm->pointer_instr;
+    uint32_t instr_data = instr_base + SIZE16;
     uint16_t instr_raw = vm_read16(vm, instr_base);
 
-    uint8_t instr_opcode    = (instr_raw >> 8);
-    uint8_t instr_condition = (instr_raw >> 4) & 7;
-    uint8_t instr_target    = (instr_raw >> 2) & 3;
-    uint8_t instr_source    = (instr_raw     ) & 3;
+    asm_instr_t instr = asm_instr_from(instr_raw);
 
-    vm->pointer_instr_mut = instr_base + SIZE16;
+    if (vm->debug) {
+        asm_iinfo_t *iinfo = asm_iinfo_get(instr.opcode);
 
-    switch (instr_opcode) {
+        uint32_t params_size = asm_disas_paramssize(instr, iinfo);
+        uint8_t *params_data = NULL;
+        if (params_size > 0) {
+            params_data = vm_findmemory(vm, instr_data, params_size, false);
+        }
+
+        char buffer[128] = {};
+        asm_disas_print(instr, iinfo, params_data, buffer);
+
+        printf("%08x %s\n", instr_base, buffer);
+    }
+
+    vm->pointer_instr_mut = instr_data;
+
+    switch (instr.opcode) {
         case OP(SZ_BYTE, OP_NOP):
         case OP(SZ_HALF, OP_NOP):
         case OP(SZ_WORD, OP_NOP): {
@@ -588,20 +782,20 @@ static void vm_execute(vm_t *vm) {
 
         case OP(SZ_WORD, OP_IN): {
             VM_PRELUDE_2(SIZE32);
-            vm_target32(vm, instr_target, vm_io_read(vm, vm_source32(vm, instr_source)));
+            vm_target32(vm, instr.target, vm_io_read(vm, vm_source32(vm, instr.source)));
             break;
         };
         case OP(SZ_WORD, OP_OUT): {
             VM_PRELUDE_2(SIZE32);
-            uint32_t value = vm_source32(vm, instr_source);
-            uint32_t port = vm_source32(vm, instr_target);
+            uint32_t value = vm_source32(vm, instr.source);
+            uint32_t port = vm_source32(vm, instr.target);
             vm_io_write(vm, port, value);
             break;
         };
 
         case OP(SZ_WORD, OP_RTA): {
             VM_PRELUDE_2(SIZE32);
-            vm_target32(vm, instr_target, instr_base + vm_source32(vm, instr_source));
+            vm_target32(vm, instr.target, instr_base + vm_source32(vm, instr.source));
             break;
         };
 

@@ -1,11 +1,12 @@
 #![no_std]
 
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+use bindings::*;
+mod bindings {
+    #![allow(warnings, unused)]
+    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+}
 
 extern crate alloc;
-
-#[cfg(feature = "std")]
-extern crate std;
 
 use core::mem;
 use core::ptr;
@@ -43,16 +44,12 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         unsafe {
-            let msg_ptr = fox32_strerr(*self as fox32_err_t);
-            let msg_slice = slice::from_raw_parts(msg_ptr.cast::<u8>(), libc::strlen(msg_ptr));
-            let msg_string = str::from_utf8_unchecked(msg_slice);
-            f.write_str(msg_string)
+            let ptr = fox32_strerr(*self as fox32_err_t);
+            let slice = slice::from_raw_parts(ptr.cast::<u8>(), libc::strlen(ptr));
+            f.write_str(str::from_utf8_unchecked(slice))
         }
     }
 }
-
-#[cfg(feature = "std")]
-impl std::error::Error for Error {}
 
 pub trait Bus {
     fn io_read(&mut self, port: u32) -> Option<u32>;
@@ -64,6 +61,9 @@ pub struct State {
     bus: *mut Box<dyn Bus>
 }
 
+// TODO: UNDEFINED BEHAVIOR!! State is not actually Send since Box<dyn Bus> is
+//       not Send. This is here for (broken) compatibility with the current
+//       emulator.
 unsafe impl Send for State {}
 
 unsafe extern "C" fn io_read_trampoline(user: *mut libc::c_void, value: *mut u32, port: u32) -> libc::c_int {
@@ -136,6 +136,9 @@ impl State {
     pub fn interrupts_paused(&self) -> &mut bool {
         unsafe { &mut (*self.vm).interrupts_paused }
     }
+    pub fn debug(&self) -> &mut bool {
+        unsafe { &mut (*self.vm).debug }
+    }
     pub fn memory_ram(&self) -> &mut [u8; FOX32_MEMORY_RAM as usize] {
         unsafe { &mut (*self.vm).memory_ram }
     }
@@ -188,27 +191,53 @@ impl Drop for State {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::cell::RefCell;
+    use core::ops::Deref;
+    use core::cell::Cell;
     use alloc::{vec::Vec, rc::Rc};
 
+    /*
+     *      mov r0, string
+     *      call print_str
+     *
+     *      halt
+     *
+     *  print_str:
+     *      push r1
+     *  print_str_loop:
+     *      mov r1, 0x00000000
+     *      out r1, [r0]
+     *      inc r0
+     *      cmp.8 [r0], 0x00
+     *      ifnz jmp print_str_loop
+     *      pop r1
+     *      ret
+     *
+     *  string: data.str "hi lua :3" data.8 13 data.8 10 data.8 0
+     */
     static HEWWO_PROGRAM: &'static [u8] = &[
-        0x02, 0x97, 0x33, 0x00, 0x00, 0x00, 0x00, 0x02, 0x98, 0x13, 0x00, 0x00,
-        0x00, 0x02, 0x88, 0x0d, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x01, 0x02, 0x97,
-        0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x9b, 0x00, 0x01, 0x00, 0x91, 0x00,
-        0x06, 0x07, 0x00, 0x00, 0x22, 0x88, 0x16, 0x00, 0x00, 0x00, 0x00, 0x9a,
-        0x01, 0x00, 0xaa, 0x68, 0x69, 0x20, 0x6c, 0x75, 0x61, 0x20, 0x3a, 0x33,
-        0x0d, 0x0a, 0x00
+        0x02, 0x97, 0x2f, 0x00, 0x00, 0x00, 0x00, 0x02, 0x98, 0x0f, 0x00, 0x00,
+        0x00, 0x00, 0x90, 0x00, 0x8a, 0x01, 0x02, 0x97, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x01, 0x9b, 0x00, 0x01, 0x00, 0x91, 0x00, 0x06, 0x07, 0x00, 0x00,
+        0x22, 0x88, 0x12, 0x00, 0x00, 0x00, 0x00, 0x9a, 0x01, 0x00, 0xaa, 0x68,
+        0x69, 0x20, 0x6c, 0x75, 0x61, 0x20, 0x3a, 0x33, 0x0d, 0x0a, 0x00
     ];
 
     #[derive(Clone, Default)]
-    struct HewwoBus { vec: Rc<RefCell<Vec<u8>>> }
+    struct HewwoBus(Rc<Cell<Vec<u8>>>);
+
+    impl Deref for HewwoBus {
+        type Target = Cell<Vec<u8>>;
+        fn deref(&self) -> &Self::Target { &self.0 }
+    }
 
     impl Bus for HewwoBus {
-        fn io_read(&mut self, _port: u32) -> Option<u32> { Some(0) }
+        fn io_read(&mut self, _port: u32) -> Option<u32> {
+            Some(0)
+        }
 
         fn io_write(&mut self, port: u32, value: u32) -> Option<()> {
             if port == 0 {
-                self.vec.borrow_mut().push(value as u8);
+                self.set({ let mut v = self.take(); v.push(value as u8); v });
             }
             Some(())
         }
@@ -227,10 +256,7 @@ mod tests {
 
         let error = state.resume(1000);
 
-        assert!(error.is_none());
-
-        let actual: &Vec<u8> = &bus.vec.borrow();
-        let expected: &Vec<u8> = &Vec::from("hi lua :3\r\n");
-        assert_eq!(actual, expected);
+        assert_eq!(error, None);
+        assert_eq!(bus.take(), Vec::from("hi lua :3\r\n"));
     }
 }

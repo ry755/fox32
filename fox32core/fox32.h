@@ -52,6 +52,8 @@ typedef struct {
     bool interrupts_enabled;
     bool interrupts_paused;
 
+    bool debug;
+
     jmp_buf panic_jmp;
     fox32_err_t panic_err;
 
