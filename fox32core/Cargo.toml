@@ -1,0 +1,11 @@
+[package]
+name = "fox32core"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+libc = { version = "0.2", default-features = false }
+
+[build-dependencies]
+cc = "1.0"
+bindgen = "0.59"

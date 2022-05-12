@@ -29,7 +29,9 @@ typedef enum {
     FOX32_ERR_BADIMMEDIATE,
     FOX32_ERR_DIVZERO,
     FOX32_ERR_IOREAD,
-    FOX32_ERR_IOWRITE
+    FOX32_ERR_IOWRITE,
+    FOX32_ERR_NOINTERRUPTS,
+    FOX32_ERR_CANTRECOVER
 } fox32_err_t;
 
 const char *fox32_strerr(fox32_err_t err);
@@ -46,9 +48,9 @@ typedef struct {
     bool flag_zero;
     bool flag_carry;
 
-    volatile bool halted;
-    volatile bool interrupt_enabled;
-    volatile bool interrupt_paused;
+    bool halted;
+    bool interrupts_enabled;
+    bool interrupts_paused;
 
     jmp_buf panic_jmp;
     fox32_err_t panic_err;
@@ -64,9 +66,16 @@ typedef struct {
 void fox32_init(fox32_vm_t *vm);
 
 fox32_err_t fox32_step(fox32_vm_t *vm);
-fox32_err_t fox32_resume(fox32_vm_t *vm);
+fox32_err_t fox32_resume(fox32_vm_t *vm, uint32_t count);
 
-bool fox32_raise(fox32_vm_t *vm, uint16_t vector);
-bool fox32_recover(fox32_vm_t *vm, fox32_err_t err);
+fox32_err_t fox32_raise(fox32_vm_t *vm, uint16_t vector);
+fox32_err_t fox32_recover(fox32_vm_t *vm, fox32_err_t err);
+
+fox32_err_t fox32_push_byte(fox32_vm_t *vm, uint8_t value);
+fox32_err_t fox32_push_half(fox32_vm_t *vm, uint16_t value);
+fox32_err_t fox32_push_word(fox32_vm_t *vm, uint32_t value);
+fox32_err_t fox32_pop_byte(fox32_vm_t *vm, uint8_t *value);
+fox32_err_t fox32_pop_half(fox32_vm_t *vm, uint16_t *value);
+fox32_err_t fox32_pop_word(fox32_vm_t *vm, uint32_t *value);
 
 #endif

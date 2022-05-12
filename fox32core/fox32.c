@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdnoreturn.h>
 #include <string.h>
+#include <setjmp.h>
 
 typedef fox32_err_t err_t;
 
@@ -17,11 +18,13 @@ static const char *const err_messages[] = {
     "write to immediate",
     "division by zero",
     "io read failed",
-    "io write failed"
+    "io write failed",
+    "interrupts disabled",
+    "error is not recoverable"
 };
 
 static const char *err_tostring(err_t err) {
-    if (err > 0 && err <= FOX32_ERR_IOWRITE) {
+    if (err > 0 && err <= FOX32_ERR_CANTRECOVER) {
         return err_messages[err];
     }
     return err_messages[FOX32_ERR_OK];
@@ -169,7 +172,7 @@ static void vm_init(vm_t *vm) {
     vm->pointer_instr = FOX32_POINTER_DEFAULT_INSTR;
     vm->pointer_stack = FOX32_POINTER_DEFAULT_STACK;
     vm->halted = true;
-    vm->interrupt_enabled = true;
+    vm->interrupts_enabled = true;
     vm->io_user = NULL;
     vm->io_read = io_read_default;
     vm->io_write = io_write_default;
@@ -216,9 +219,10 @@ static uint32_t *vm_findlocal(vm_t *vm, uint8_t local) {
 }
 
 static uint8_t *vm_findmemory(vm_t *vm, uint32_t address, uint32_t size) {
+    uint32_t address_end = address + size;
     if (
-        (address + size < FOX32_MEMORY_RAM) ||
-        (address >= FOX32_MEMORY_ROM_START && (address -= FOX32_MEMORY_ROM_START) + size < FOX32_MEMORY_ROM)
+        (address_end < FOX32_MEMORY_RAM && address_end > address) ||
+        (address >= FOX32_MEMORY_ROM_START && address_end - FOX32_MEMORY_ROM_START < FOX32_MEMORY_ROM)
     ) {
         return &vm->memory_ram[address];
     }
@@ -602,8 +606,8 @@ static void vm_execute(vm_t *vm) {
         };
         case OP(SZ_WORD, OP_RETI): {
             VM_PRELUDE_0();
-            vm->interrupt_enabled = vm->interrupt_paused;
-            vm->interrupt_paused = false;
+            vm->interrupts_enabled = vm->interrupts_paused;
+            vm->interrupts_paused = false;
             vm_flags_set(vm, vm_pop8(vm));
             vm->pointer_instr_mut = vm_pop32(vm);
             break;
@@ -611,14 +615,14 @@ static void vm_execute(vm_t *vm) {
 
         case OP(SZ_WORD, OP_ISE): {
             VM_PRELUDE_0();
-            vm->interrupt_enabled = true;
-            vm->interrupt_paused = false;
+            vm->interrupts_enabled = true;
+            vm->interrupts_paused = false;
             break;
         };
         case OP(SZ_WORD, OP_ICL): {
             VM_PRELUDE_0();
-            vm->interrupt_enabled = false;
-            vm->interrupt_paused = false;
+            vm->interrupts_enabled = false;
+            vm->interrupts_paused = false;
             break;
         };
 
@@ -737,27 +741,23 @@ static err_t vm_step(vm_t *vm) {
     vm_execute(vm);
     return FOX32_ERR_OK;
 }
-static err_t vm_resume(vm_t *vm) {
+static err_t vm_resume(vm_t *vm, uint32_t count) {
     if (setjmp(vm->panic_jmp) != 0) {
         return vm->halted = true, vm->panic_err;
     }
-    while (!vm->halted) {
+    while (!vm->halted && count > 0) {
         vm_execute(vm);
+        count -= 1;
     }
     return FOX32_ERR_OK;
 }
 
-static bool vm_raise(vm_t *vm, uint16_t vector) {
-    vm->halted = true;
-
-    if (vm->interrupt_paused || !vm->interrupt_enabled) {
-        return false;
+static fox32_err_t vm_raise(vm_t *vm, uint16_t vector) {
+    if (vm->interrupts_paused || !vm->interrupts_enabled) {
+        return FOX32_ERR_NOINTERRUPTS;
     }
-
-    vm->interrupt_paused = true;
-
     if (setjmp(vm->panic_jmp) != 0) {
-        return false;
+        return vm->panic_err;
     }
 
     uint32_t pointer_handler = vm_read32(vm, SIZE32 * (uint32_t) vector);
@@ -766,11 +766,13 @@ static bool vm_raise(vm_t *vm, uint16_t vector) {
     vm_push8(vm, vm_flags_get(vm));
 
     vm->pointer_instr = pointer_handler;
+    vm->halted = true;
+    vm->interrupts_paused = true;
 
-    return true;
+    return FOX32_ERR_OK;
 }
 
-static bool vm_recover(vm_t *vm, err_t err) {
+static fox32_err_t vm_recover(vm_t *vm, err_t err) {
     switch (err) {
         case FOX32_ERR_DEBUGGER:
             return vm_raise(vm, EX_DEBUGGER);
@@ -787,8 +789,43 @@ static bool vm_recover(vm_t *vm, err_t err) {
         case FOX32_ERR_IOWRITE:
             return vm_raise(vm, EX_BUS);
         default:
-            return false;
+            return FOX32_ERR_CANTRECOVER;
     }
+}
+
+#define VM_SAFEPUSH_BODY(_vm_push)    \
+    if (setjmp(vm->panic_jmp) != 0) { \
+        return vm->panic_err;         \
+    }                                 \
+    _vm_push(vm, value);              \
+    return FOX32_ERR_OK;
+
+static fox32_err_t vm_safepush_byte(vm_t *vm, uint8_t value) {
+    VM_SAFEPUSH_BODY(vm_push8)
+}
+static fox32_err_t vm_safepush_half(vm_t *vm, uint16_t value) {
+    VM_SAFEPUSH_BODY(vm_push16)
+}
+static fox32_err_t vm_safepush_word(vm_t *vm, uint32_t value) {
+    VM_SAFEPUSH_BODY(vm_push32)
+}
+
+#define VM_SAFEPOP_BODY(_vm_pop)      \
+    *value = 0;                       \
+    if (setjmp(vm->panic_jmp) != 0) { \
+        return vm->panic_err;         \
+    }                                 \
+    *value = _vm_pop(vm);             \
+    return FOX32_ERR_OK;
+
+static fox32_err_t vm_safepop_byte(vm_t *vm, uint8_t *value) {
+    VM_SAFEPOP_BODY(vm_pop8)
+}
+static fox32_err_t vm_safepop_half(vm_t *vm, uint16_t *value) {
+    VM_SAFEPOP_BODY(vm_pop16)
+}
+static fox32_err_t vm_safepop_word(vm_t *vm, uint32_t *value) {
+    VM_SAFEPOP_BODY(vm_pop32)
 }
 
 const char *fox32_strerr(fox32_err_t err) {
@@ -800,40 +837,30 @@ void fox32_init(fox32_vm_t *vm) {
 fox32_err_t fox32_step(fox32_vm_t *vm) {
     return vm_step(vm);
 }
-fox32_err_t fox32_resume(fox32_vm_t *vm) {
-    return vm_resume(vm);
+fox32_err_t fox32_resume(fox32_vm_t *vm, uint32_t count) {
+    return vm_resume(vm, count);
 }
-bool fox32_raise(fox32_vm_t *vm, uint16_t vector) {
+fox32_err_t fox32_raise(fox32_vm_t *vm, uint16_t vector) {
     return vm_raise(vm, vector);
 }
-bool fox32_recover(fox32_vm_t *vm, fox32_err_t err) {
+fox32_err_t fox32_recover(fox32_vm_t *vm, fox32_err_t err) {
     return vm_recover(vm, err);
 }
-
-static vm_t vm;
-
-static const uint8_t lua_test[] = {
-  0x02, 0x97, 0x33, 0x00, 0x00, 0x00, 0x00, 0x02, 0x98, 0x13, 0x00, 0x00,
-  0x00, 0x02, 0x88, 0x0d, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x01, 0x02, 0x97,
-  0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x9b, 0x00, 0x01, 0x00, 0x91, 0x00,
-  0x06, 0x07, 0x00, 0x00, 0x22, 0x88, 0x16, 0x00, 0x00, 0x00, 0x00, 0x9a,
-  0x01, 0x00, 0xaa, 0x68, 0x69, 0x20, 0x6c, 0x75, 0x61, 0x20, 0x3a, 0x33,
-  0x0d, 0x0a, 0x00
-};
-
-int main(int argc, char **argv) {
-    vm_init(&vm);
-
-    vm.halted = false;
-
-    vm.pointer_instr = 0;
-    vm.pointer_stack = 8192;
-
-    memcpy(vm.memory_ram, lua_test, sizeof(lua_test));
-
-    err_t err = vm_resume(&vm);
-
-    puts(err_tostring(err));
-
-    return 0;
+fox32_err_t fox32_push_byte(fox32_vm_t *vm, uint8_t value) {
+    return vm_safepush_byte(vm, value);
+}
+fox32_err_t fox32_push_half(fox32_vm_t *vm, uint16_t value) {
+    return vm_safepush_half(vm, value);
+}
+fox32_err_t fox32_push_word(fox32_vm_t *vm, uint32_t value) {
+    return vm_safepush_word(vm, value);
+}
+fox32_err_t fox32_pop_byte(fox32_vm_t *vm, uint8_t *value) {
+    return vm_safepop_byte(vm, value);
+}
+fox32_err_t fox32_pop_half(fox32_vm_t *vm, uint16_t *value) {
+    return vm_safepop_half(vm, value);
+}
+fox32_err_t fox32_pop_word(fox32_vm_t *vm, uint32_t *value) {
+    return vm_safepop_word(vm, value);
 }
