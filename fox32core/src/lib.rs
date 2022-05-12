@@ -4,6 +4,9 @@ include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
 extern crate alloc;
 
+#[cfg(feature = "std")]
+extern crate std;
+
 use core::mem;
 use core::ptr;
 use core::slice;
@@ -47,6 +50,9 @@ impl fmt::Display for Error {
         }
     }
 }
+
+#[cfg(feature = "std")]
+impl std::error::Error for Error {}
 
 pub trait Bus {
     fn io_read(&mut self, port: u32) -> Option<u32>;
