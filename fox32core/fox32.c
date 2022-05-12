@@ -218,19 +218,19 @@ static uint32_t *vm_findlocal(vm_t *vm, uint8_t local) {
     vm_panic(vm, FOX32_ERR_BADREGISTER);
 }
 
-static uint8_t *vm_findmemory(vm_t *vm, uint32_t address, uint32_t size) {
+static uint8_t *vm_findmemory(vm_t *vm, uint32_t address, uint32_t size, bool write) {
     uint32_t address_end = address + size;
-    if (
-        (address_end < FOX32_MEMORY_RAM && address_end > address) ||
-        (address >= FOX32_MEMORY_ROM_START && address_end - FOX32_MEMORY_ROM_START < FOX32_MEMORY_ROM)
-    ) {
+    if (address_end < FOX32_MEMORY_RAM && address_end > address) {
         return &vm->memory_ram[address];
+    }
+    if (!write && address >= FOX32_MEMORY_ROM_START && (address -= FOX32_MEMORY_ROM_START) + size < FOX32_MEMORY_ROM) {
+        return &vm->memory_rom[address];
     }
     vm_panic(vm, FOX32_ERR_FAULT);
 }
 
 #define VM_READ_BODY(_ptr_get, _size) \
-    return _ptr_get(vm_findmemory(vm, address, _size));
+    return _ptr_get(vm_findmemory(vm, address, _size, false));
 
 static uint8_t vm_read8(vm_t *vm, uint32_t address) {
     VM_READ_BODY(ptr_get8, SIZE8)
@@ -243,7 +243,7 @@ static uint32_t vm_read32(vm_t *vm, uint32_t address) {
 }
 
 #define VM_WRITE_BODY(_ptr_set, _size) \
-    _ptr_set(vm_findmemory(vm, address, _size), value);
+    _ptr_set(vm_findmemory(vm, address, _size, true), value);
 
 static void vm_write8(vm_t *vm, uint32_t address, uint8_t value) {
     VM_WRITE_BODY(ptr_set8, SIZE8)

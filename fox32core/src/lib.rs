@@ -196,9 +196,8 @@ mod tests {
     struct HewwoBus { vec: Rc<RefCell<Vec<u8>>> }
 
     impl Bus for HewwoBus {
-        fn io_read(&mut self, port: u32) -> Option<u32> {
-            Some(0)
-        }
+        fn io_read(&mut self, _port: u32) -> Option<u32> { Some(0) }
+
         fn io_write(&mut self, port: u32, value: u32) -> Option<()> {
             if port == 0 {
                 self.vec.borrow_mut().push(value as u8);
