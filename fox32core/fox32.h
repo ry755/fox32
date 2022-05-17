@@ -47,10 +47,9 @@ typedef struct {
 
     bool flag_zero;
     bool flag_carry;
+    bool flag_interrupt;
 
     bool halted;
-    bool interrupts_enabled;
-    bool interrupts_paused;
 
     bool debug;
 

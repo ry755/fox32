@@ -127,14 +127,11 @@ impl State {
     pub fn flag_carry(&self) -> &mut bool {
         unsafe { &mut (*self.vm).flag_carry }
     }
+    pub fn flag_interrupt(&self) -> &mut bool {
+        unsafe { &mut (*self.vm).flag_interrupt }
+    }
     pub fn halted(&self) -> &mut bool {
         unsafe { &mut (*self.vm).halted }
-    }
-    pub fn interrupts_enabled(&self) -> &mut bool {
-        unsafe { &mut (*self.vm).interrupts_enabled }
-    }
-    pub fn interrupts_paused(&self) -> &mut bool {
-        unsafe { &mut (*self.vm).interrupts_paused }
     }
     pub fn debug(&self) -> &mut bool {
         unsafe { &mut (*self.vm).debug }

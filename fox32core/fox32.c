@@ -351,7 +351,6 @@ static void vm_init(vm_t *vm) {
     vm->pointer_instr = FOX32_POINTER_DEFAULT_INSTR;
     vm->pointer_stack = FOX32_POINTER_DEFAULT_STACK;
     vm->halted = true;
-    vm->interrupts_enabled = true;
     vm->io_user = NULL;
     vm->io_read = io_read_default;
     vm->io_write = io_write_default;
@@ -380,11 +379,12 @@ static void vm_io_write(vm_t *vm, uint32_t port, uint32_t value) {
 }
 
 static uint8_t vm_flags_get(vm_t *vm) {
-    return (((uint8_t) vm->flag_carry) << 1) | ((uint8_t) vm->flag_zero);
+    return (((uint8_t) vm->flag_interrupt) << 2) | (((uint8_t) vm->flag_carry) << 1) | ((uint8_t) vm->flag_zero);
 }
 static void vm_flags_set(vm_t *vm, uint8_t flags) {
     vm->flag_zero = (flags & 1) != 0;
     vm->flag_carry = (flags & 2) != 0;
+    vm->flag_interrupt = (flags & 4) != 0;
 }
 
 static uint32_t *vm_findlocal(vm_t *vm, uint8_t local) {
@@ -807,8 +807,6 @@ static void vm_execute(vm_t *vm) {
         };
         case OP(SZ_WORD, OP_RETI): {
             VM_PRELUDE_0();
-            vm->interrupts_enabled = vm->interrupts_paused;
-            vm->interrupts_paused = false;
             vm_flags_set(vm, vm_pop8(vm));
             vm->pointer_instr_mut = vm_pop32(vm);
             break;
@@ -816,14 +814,12 @@ static void vm_execute(vm_t *vm) {
 
         case OP(SZ_WORD, OP_ISE): {
             VM_PRELUDE_0();
-            vm->interrupts_enabled = true;
-            vm->interrupts_paused = false;
+            vm->flag_interrupt = true;
             break;
         };
         case OP(SZ_WORD, OP_ICL): {
             VM_PRELUDE_0();
-            vm->interrupts_enabled = false;
-            vm->interrupts_paused = false;
+            vm->flag_interrupt = false;
             break;
         };
 
@@ -955,7 +951,7 @@ static err_t vm_resume(vm_t *vm, uint32_t count) {
 }
 
 static fox32_err_t vm_raise(vm_t *vm, uint16_t vector) {
-    if (vm->interrupts_paused || !vm->interrupts_enabled) {
+    if (!vm->flag_interrupt) {
         return FOX32_ERR_NOINTERRUPTS;
     }
     if (setjmp(vm->panic_jmp) != 0) {
@@ -969,7 +965,7 @@ static fox32_err_t vm_raise(vm_t *vm, uint16_t vector) {
 
     vm->pointer_instr = pointer_handler;
     vm->halted = true;
-    vm->interrupts_paused = true;
+    vm->flag_interrupt = false;
 
     return FOX32_ERR_OK;
 }
