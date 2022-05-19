@@ -1,0 +1,3 @@
+[submodule "fox32os/build/ryfs"]
+	path = fox32os/build/ryfs
+	url = https://github.com/ry755/ryfs
