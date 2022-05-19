@@ -5,6 +5,9 @@
 
 **/fox32.rom
 
+**/system.bin
+**/fox32os.img
+
 **/memory.dump
 
 /tests/
