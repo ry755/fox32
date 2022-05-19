@@ -1,6 +1,8 @@
 fn main() {
     cc::Build::new()
         .file("fox32.c")
+        .flag_if_supported("-std=c17")
+        .flag_if_supported("/std:c17")
         .compile("fox32core_impl");
 
     bindgen::Builder::default()
