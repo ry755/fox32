@@ -6,7 +6,9 @@
 **/fox32.rom
 
 **/system.bin
+**/*.fxf
 **/fox32os.img
+**/wallpapr.raw
 
 **/memory.dump
 
