@@ -1,3 +1,5 @@
+# This repository has been replaced by [an organization](https://github.com/fox32-arch)
+
 # fox32
 
 ![fox32 logo](docs/logos/fox32.png)
